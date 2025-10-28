@@ -1,0 +1,1 @@
+source ./flask_csv_api/venv/Scripts/activate

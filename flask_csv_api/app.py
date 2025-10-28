@@ -11,13 +11,13 @@ CSV_FILE_PATH = 'US_Accidents_March23.csv'
 @app.route('/accidents/sample', methods=['GET'])
 def get_accidents_sample():
     """
-    Reads a sample (the first 100 rows) from the accidents CSV
+    Reads a sample (the first 10 rows) from the accidents CSV
     and returns it as JSON without loading the entire file into memory.
     """
     try:
         # Use chunksize to read the large file in pieces. This returns an iterator.
         # We'll just read the first chunk to prove the file is accessible and get a sample.
-        chunk_size = 100
+        chunk_size = 10
         reader = pd.read_csv(CSV_FILE_PATH, chunksize=chunk_size)
         first_chunk_df = next(reader)
 
@@ -52,6 +52,40 @@ def get_accident_columns():
 
     except FileNotFoundError:
         abort(404, description="Data source not found.")
+    except Exception as e:
+        abort(500, description=f"An error occurred: {e}")
+
+
+# POST, GET, PUT, DELETE methods can be added here for more functionality.
+@app.route('/accidents/data/<int:number_of_rows>/<int:page_number>', methods=['GET'])
+def get_accident_data(number_of_rows, page_number):
+    """
+    Retrieves a specific number of rows from the CSV file based on pagination.
+    This method reads only the required rows to minimize memory usage.
+    """
+    try:
+        # Input validation
+        if number_of_rows <= 0 or page_number <= 0:
+            abort(400, description="Number of rows and page number must be positive integers.")
+
+        # Calculate the starting row for the requested page
+        # Page number is 1-based, pandas rows are 0-based after the header.
+        start_row = (page_number - 1) * number_of_rows
+        
+        # Use skiprows to skip rows before the start_row and nrows to limit the number of rows read
+        # skiprows needs a list of row indices to skip. We skip the header (row 0) from this logic,
+        # so we skip rows from 1 to start_row.
+        df_page = pd.read_csv(CSV_FILE_PATH, skiprows=range(1, start_row + 1), nrows=number_of_rows)
+
+        # Convert the DataFrame to a list of dictionaries
+        records = df_page.to_dict(orient='records')
+
+        return jsonify(records)
+
+    except FileNotFoundError:
+        abort(404, description="Data source not found.")
+    except ValueError:
+        abort(400, description="Invalid input: number_of_rows and page_number must be integers.")
     except Exception as e:
         abort(500, description=f"An error occurred: {e}")
 
