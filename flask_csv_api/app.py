@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from flask import Flask, jsonify, abort
 from flask_cors import CORS
@@ -14,6 +15,10 @@ CORS(app)
 # Define the path to your CSV file.
 # Using a constant is good practice for file paths.
 CSV_FILE_PATH = 'US_Accidents_March23.csv'
+
+def ensure_file():
+    if not os.path.isfile(CSV_FILE_PATH):
+        abort(500, description=f"CSV file not found at {CSV_FILE_PATH}")
 
 @app.route('/accidents/sample', methods=['GET'])
 def get_accidents_sample():
@@ -141,6 +146,31 @@ def get_accident_count_by_state():
         abort(404, description="Data source not found.")
     except Exception as e:
         abort(500, description=f"An error occurred: {e}")
+
+@app.route('/accidents/total_records', methods=['GET'])
+def get_total_records():
+    try:
+        ensure_file()
+            
+        df = pd.read_csv(CSV_FILE_PATH, usecols=['ID'])
+        return jsonify({"total": len(df)})
+    except Exception as e:
+        abort(500, description=str(e))
+
+@app.route('/accidents/yearly_stats', methods=['GET'])
+def get_yearly_stats():
+    try:
+        ensure_file()
+        df = pd.read_csv(CSV_FILE_PATH, usecols=['Start_Time'])
+        # Convert to datetime and extract year safely
+        df['Year'] = pd.to_datetime(df['Start_Time'], errors='coerce').dt.year
+        yearly = df['Year'].dropna().astype(int).value_counts().reset_index()
+        yearly.columns = ['year', 'count']
+        yearly = yearly.sort_values('year')
+        return jsonify(yearly.to_dict('records'))
+    except Exception as e:
+        print(f"Error in yearly_stats: {str(e)}")  # Debug log
+        abort(500, description=str(e))
 
 # This is a standard entry point for a Flask application
 if __name__ == '__main__':
