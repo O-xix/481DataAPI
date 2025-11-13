@@ -5,12 +5,17 @@ steps:
   # Enable BuildKit for this step
   env: ['DOCKER_BUILDKIT=1']
   args:
+    - 'buildx'
     - 'build'
-    - '--secret-source=kaggle_credentials=projects/${PROJECT_ID}/secrets/kaggle-api-key' # Reference your secret manager secret
+    # The --secret flag for buildx is how it consumes the secret made available by Cloud Build.
+    # The 'id' must match the 'id' in your Dockerfile's RUN --mount command.
+    # The 'src' path is where Cloud Build automatically places the secret file.
+    - '--secret=id=kaggle_credentials,src=/run/secrets/kaggle_credentials'
     - '-t'
-    - 'gcr.io//data-api-481:latest' # Replace 'data-api-481' with your desired image name
+    - 'gcr.io/${PROJECT_ID}/data-api-481:latest' # Corrected the image path
     - '.' # Build context is the current directory (where Dockerfile is)
+    - '--load' # This ensures the image is loaded into the local Docker daemon to be pushed
 
 # If you want to push the image to Google Container Registry (GCR) or Artifact Registry
 images:
-- 'gcr.io//data-api-481:latest'
+- 'gcr.io/${PROJECT_ID}/data-api-481:latest' # Corrected the image path
