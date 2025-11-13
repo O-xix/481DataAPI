@@ -1,8 +1,9 @@
 import os
-import pandas as pd
-from flask import Flask, jsonify, abort
-import os
+import io
 import zipfile
+import pandas as pd
+from flask import Flask, request, jsonify, abort, send_file
+from google.cloud import storage
 import kaggle
 from flask_cors import CORS
 
@@ -18,6 +19,21 @@ CORS(app)
 # Define constants for the dataset
 CSV_FILE_PATH = 'US_Accidents_March23.csv'
 KAGGLE_DATASET = 'sobhanmoosavi/us-accidents'
+
+# Google Cloud Storage bucket (can be overridden by env var)
+CLOUD_STORAGE_BUCKET = os.getenv('CLOUD_STORAGE_BUCKET', 'car-accindent-data')
+
+def get_storage_bucket():
+        """Return a google.cloud.storage Bucket instance for the configured bucket.
+
+        Notes:
+        - Locally, set GOOGLE_APPLICATION_CREDENTIALS to the JSON key file for a service account
+            that has storage.objectViewer/storage.objectCreator (or broader) permissions.
+        - On Cloud Run or GKE with Workload Identity, the runtime service account should have
+            the appropriate IAM roles and the client will pick up credentials automatically.
+        """
+        client = storage.Client()
+        return client.bucket(CLOUD_STORAGE_BUCKET)
 
 # This will hold our entire dataset in memory.
 # It's initialized to None and will be populated by load_dataset_on_startup.
@@ -65,6 +81,51 @@ def load_dataset_on_startup():
 def ensure_file():
     if not os.path.isfile(CSV_FILE_PATH):
         abort(500, description=f"CSV file not found at {CSV_FILE_PATH}")
+
+
+@app.route('/gcs/download/<filename>', methods=['GET'])
+def gcs_download(filename):
+    """Download a file from the configured GCS bucket and stream it to the client."""
+    try:
+        bucket = get_storage_bucket()
+        blob = bucket.blob(filename)
+
+        if not blob.exists():
+            return jsonify({"error": "File not found"}), 404
+
+        file_in_memory = io.BytesIO()
+        blob.download_to_file(file_in_memory)
+        file_in_memory.seek(0)
+
+        mimetype = blob.content_type or 'application/octet-stream'
+        return send_file(
+            file_in_memory,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        return jsonify({"error": f"Failed to download file: {str(e)}"}), 500
+
+
+@app.route('/gcs/upload', methods=['POST'])
+def gcs_upload():
+    """Upload a file provided in the multipart form to the configured GCS bucket."""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part in the request"}), 400
+
+    uploaded_file = request.files['file']
+
+    if uploaded_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    try:
+        bucket = get_storage_bucket()
+        blob = bucket.blob(uploaded_file.filename)
+        blob.upload_from_file(uploaded_file, content_type=uploaded_file.content_type)
+        return jsonify({"message": f"File {uploaded_file.filename} uploaded successfully to {CLOUD_STORAGE_BUCKET}"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to upload file: {str(e)}"}), 500
 
 @app.route('/accidents/sample', methods=['GET'])
 def get_accidents_sample():
