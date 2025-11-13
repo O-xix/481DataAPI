@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+env/
+*.pyc
+.git
+.gitignore
+*.log
+*.sqlite3
+# Ignore local environment files
+.env
+
+# Ignore large local data files so the image build stays small. If you want the CSV inside the image,
+# remove this line and ensure the file is present in the build context.
+US_Accidents_March23.csv
