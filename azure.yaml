@@ -8,6 +8,9 @@ services:
         project: .
         host: containerapp
         language: python
+        docker:
+            environment:
+                DISABLE_COLLECT_DEPS: "true"
 resources:
     data-api-481:
         type: host.containerapp
