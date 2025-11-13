@@ -1,0 +1,16 @@
+# cloudbuild.yaml
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  id: Build Docker Image
+  # Enable BuildKit for this step
+  env: ['DOCKER_BUILDKIT=1']
+  args:
+    - 'build'
+    - '--secret-source=kaggle_credentials=projects/${PROJECT_ID}/secrets/kaggle-api-key' # Reference your secret manager secret
+    - '-t'
+    - 'gcr.io//data-api-481:latest' # Replace 'data-api-481' with your desired image name
+    - '.' # Build context is the current directory (where Dockerfile is)
+
+# If you want to push the image to Google Container Registry (GCR) or Artifact Registry
+images:
+- 'gcr.io//data-api-481:latest'

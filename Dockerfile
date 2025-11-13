@@ -27,10 +27,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 1. Create a directory for Kaggle credentials.
 RUN mkdir -p /root/.kaggle/
 
-# 2. Use a build secret to securely provide the kaggle.json file.
-#    This prevents your API key from being stored in the final image layers.
-#    You will run the build command with: docker build --secret id=kaggle,src=path/to/your/kaggle.json .
-RUN --mount=type=secret,id=kaggle,target=/root/.kaggle/kaggle.json \
+# 2. Use a build secret to securely provide the kaggle.json file from Google Secret Manager.
+#    The secret 'kaggle_credentials' is defined in cloudbuild.yaml.
+RUN --mount=type=secret,id=kaggle_credentials,target=/root/.kaggle/kaggle.json \
     # 3. Download the dataset from Kaggle.
     kaggle datasets download -d sobhanmoosavi/us-accidents -p /app/flask_csv_api --unzip
 # --- End of Additions ---
