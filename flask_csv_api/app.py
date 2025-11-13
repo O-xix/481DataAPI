@@ -42,38 +42,27 @@ ACCIDENTS_DF = None
 @app.before_first_request
 def load_dataset_on_startup():
     """
-    Downloads the dataset from Kaggle if not present, then loads it into
-    a global pandas DataFrame. This runs only once before the first request.
+    Loads the dataset from the local CSV file into a global pandas DataFrame.
+    This runs once before the first request. The CSV file is expected to be
+    included in the container image during the build process.
     """
     global ACCIDENTS_DF
 
-    zip_file_path = f"{KAGGLE_DATASET.split('/')[1]}.zip"
+    # --- Best Practice: Use absolute paths relative to the app's location ---
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(app_dir, CSV_FILE_PATH)
 
-    # To avoid re-downloading, we check for the zip file.
-    if not os.path.exists(zip_file_path) and not os.path.exists(CSV_FILE_PATH):
-        print(f"Dataset not found locally. Downloading from Kaggle...")
-        try:
-            # Download the dataset but don't unzip it automatically.
-            kaggle.api.dataset_download_files(KAGGLE_DATASET, path='.', unzip=False)
-            print("Download complete.")
-        except Exception as e:
-            # Use abort to stop the app if download fails, as it cannot proceed.
-            abort(500, description=f"Fatal error: Could not download dataset from Kaggle: {e}")
+    if not os.path.exists(csv_path):
+        abort(500, description=f"Fatal error: Dataset CSV file not found at {csv_path}. It should be included in the container image.")
 
     try:
         print("Loading dataset into memory...")
-        # Read the CSV directly from the zip file into the DataFrame
-        with zipfile.ZipFile(zip_file_path, 'r') as z:
-            with z.open(CSV_FILE_PATH) as f:
-                ACCIDENTS_DF = pd.read_csv(f)
-        
+        # Read the CSV directly into the DataFrame
+        ACCIDENTS_DF = pd.read_csv(csv_path)
+
         # Replace NaN values with None for proper JSON serialization
         ACCIDENTS_DF = ACCIDENTS_DF.where(pd.notnull(ACCIDENTS_DF), None)
         print("Dataset loaded successfully.")
-        
-        # Clean up the downloaded zip file to save disk space
-        os.remove(zip_file_path)
-        print(f"Removed temporary file: {zip_file_path}")
 
     except Exception as e:
         abort(500, description=f"Fatal error: Could not load dataset into memory: {e}")

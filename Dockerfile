@@ -9,8 +9,8 @@ WORKDIR /app
 # Install minimal build tools in case some packages need compilation (pandas often installs wheels,
 # but some environments may need the build toolchain). Keep layers small by cleaning apt cache.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
-    && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends build-essential unzip \
+ && rm -rf /var/lib/apt/lists/*
 
 # Default PORT used by the Flask app when not overridden. Aligns with `app.py` default (8080).
 ENV PORT=8080
@@ -20,6 +20,20 @@ COPY requirements.txt ./
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# --- Additions for Downloading Data ---
+# This section downloads the dataset during the image build.
+
+# 1. Create a directory for Kaggle credentials.
+RUN mkdir -p /root/.kaggle/
+
+# 2. Use a build secret to securely provide the kaggle.json file.
+#    This prevents your API key from being stored in the final image layers.
+#    You will run the build command with: docker build --secret id=kaggle,src=path/to/your/kaggle.json .
+RUN --mount=type=secret,id=kaggle,target=/root/.kaggle/kaggle.json \
+    # 3. Download the dataset from Kaggle.
+    kaggle datasets download -d sobhanmoosavi/us-accidents -p /app/flask_csv_api --unzip
+# --- End of Additions ---
 
 # Copy application source
 COPY flask_csv_api ./flask_csv_api
