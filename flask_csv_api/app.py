@@ -200,4 +200,4 @@ if __name__ == '__main__':
     # Run the app in debug mode for development.
     # Debug mode provides helpful error messages and auto-reloads the server on code changes.
     # For production, you would use a proper WSGI server like Gunicorn or uWSGI.
-    app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.ge))
