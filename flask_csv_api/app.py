@@ -78,12 +78,7 @@ def load_dataset_on_startup():
     except Exception as e:
         abort(500, description=f"Fatal error: Could not load dataset into memory: {e}")
 
-def ensure_file():
-    if not os.path.isfile(CSV_FILE_PATH):
-        abort(500, description=f"CSV file not found at {CSV_FILE_PATH}")
-
-
-@app.route('/gcs/download/<filename>', methods=['GET'])
+@app.route('/gcs/download/<path:filename>', methods=['GET'])
 def gcs_download(filename):
     """Download a file from the configured GCS bucket and stream it to the client."""
     try:
@@ -191,21 +186,19 @@ def get_accident_count_by_state():
 @app.route('/accidents/total_records', methods=['GET'])
 def get_total_records():
     try:
-        ensure_file()
-            
-        df = pd.read_csv(CSV_FILE_PATH, usecols=['ID'])
-        return jsonify({"total": len(df)})
+        # Use the in-memory DataFrame for a fast count.
+        return jsonify({"total": len(ACCIDENTS_DF)})
     except Exception as e:
         abort(500, description=str(e))
 
 @app.route('/accidents/yearly_stats', methods=['GET'])
 def get_yearly_stats():
     try:
-        ensure_file()
-        df = pd.read_csv(CSV_FILE_PATH, usecols=['Start_Time'])
+        # Perform the operation on the in-memory DataFrame.
         # Convert to datetime and extract year safely
-        df['Year'] = pd.to_datetime(df['Start_Time'], errors='coerce').dt.year
-        yearly = df['Year'].dropna().astype(int).value_counts().reset_index()
+        df_copy = ACCIDENTS_DF[['Start_Time']].copy()
+        df_copy['Year'] = pd.to_datetime(df_copy['Start_Time'], errors='coerce').dt.year
+        yearly = df_copy['Year'].dropna().astype(int).value_counts().reset_index()
         yearly.columns = ['year', 'count']
         yearly = yearly.sort_values('year')
         return jsonify(yearly.to_dict('records'))
