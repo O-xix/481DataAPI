@@ -1,6 +1,9 @@
 import os
 import pandas as pd
 from flask import Flask, jsonify, abort
+import os
+import zipfile
+import kaggle
 from flask_cors import CORS
 
 # Create the Flask application instance
@@ -12,9 +15,52 @@ app = Flask(__name__)
 # CORS(app, origins=["http://localhost:5173"]) 
 CORS(app)
 
-# Define the path to your CSV file.
-# Using a constant is good practice for file paths.
+# Define constants for the dataset
 CSV_FILE_PATH = 'US_Accidents_March23.csv'
+KAGGLE_DATASET = 'sobhanmoosavi/us-accidents'
+
+# This will hold our entire dataset in memory.
+# It's initialized to None and will be populated by load_dataset_on_startup.
+ACCIDENTS_DF = None
+
+@app.before_first_request
+def load_dataset_on_startup():
+    """
+    Downloads the dataset from Kaggle if not present, then loads it into
+    a global pandas DataFrame. This runs only once before the first request.
+    """
+    global ACCIDENTS_DF
+
+    zip_file_path = f"{KAGGLE_DATASET.split('/')[1]}.zip"
+
+    # To avoid re-downloading, we check for the zip file.
+    if not os.path.exists(zip_file_path) and not os.path.exists(CSV_FILE_PATH):
+        print(f"Dataset not found locally. Downloading from Kaggle...")
+        try:
+            # Download the dataset but don't unzip it automatically.
+            kaggle.api.dataset_download_files(KAGGLE_DATASET, path='.', unzip=False)
+            print("Download complete.")
+        except Exception as e:
+            # Use abort to stop the app if download fails, as it cannot proceed.
+            abort(500, description=f"Fatal error: Could not download dataset from Kaggle: {e}")
+
+    try:
+        print("Loading dataset into memory...")
+        # Read the CSV directly from the zip file into the DataFrame
+        with zipfile.ZipFile(zip_file_path, 'r') as z:
+            with z.open(CSV_FILE_PATH) as f:
+                ACCIDENTS_DF = pd.read_csv(f)
+        
+        # Replace NaN values with None for proper JSON serialization
+        ACCIDENTS_DF = ACCIDENTS_DF.where(pd.notnull(ACCIDENTS_DF), None)
+        print("Dataset loaded successfully.")
+        
+        # Clean up the downloaded zip file to save disk space
+        os.remove(zip_file_path)
+        print(f"Removed temporary file: {zip_file_path}")
+
+    except Exception as e:
+        abort(500, description=f"Fatal error: Could not load dataset into memory: {e}")
 
 def ensure_file():
     if not os.path.isfile(CSV_FILE_PATH):
@@ -23,30 +69,11 @@ def ensure_file():
 @app.route('/accidents/sample', methods=['GET'])
 def get_accidents_sample():
     """
-    Reads a sample (the first 10 rows) from the accidents CSV
-    and returns it as JSON without loading the entire file into memory.
+    Returns a sample (the first 10 rows) from the in-memory DataFrame.
     """
-    try:
-        # Use chunksize to read the large file in pieces. This returns an iterator.
-        # We'll just read the first chunk to prove the file is accessible and get a sample.
-        chunk_size = 10
-        reader = pd.read_csv(CSV_FILE_PATH, chunksize=chunk_size)
-        first_chunk_df = next(reader)
-
-        # Replace pandas NA/NaN with None so JSON encoder emits `null` for missing values,
-        # then convert the DataFrame to a list of dictionaries.
-        cleaned = first_chunk_df.where(pd.notnull(first_chunk_df), None)
-        records = cleaned.to_dict(orient='records')
-
-        # Use jsonify to properly format the response with the correct headers
-        return jsonify(records)
-
-    except FileNotFoundError:
-        # If the CSV file does not exist, return a 404 error
-        abort(404, description="Data source not found.")
-    except Exception as e:
-        # For any other errors during file processing, return a 500 internal server error
-        return abort(500, description=f"An error occurred: {e}")
+    sample_df = ACCIDENTS_DF.head(10)
+    records = sample_df.to_dict(orient='records')
+    return jsonify(records)
 
 @app.route('/accidents/columns', methods=['GET'])
 def get_accident_columns():
@@ -54,20 +81,8 @@ def get_accident_columns():
     Reads only the header of the CSV to get all column names.
     This is a very fast and memory-efficient operation.
     """
-    try:
-        # By specifying nrows=0, pandas will only read the header row and no data.
-        df_header = pd.read_csv(CSV_FILE_PATH, nrows=0)
-
-        # The .columns attribute is an Index object; convert it to a list.
-        column_names = df_header.columns.tolist()
-
-        # Return the list of column names as a JSON array.
-        return jsonify(column_names)
-
-    except FileNotFoundError:
-        abort(404, description="Data source not found.")
-    except Exception as e:
-        abort(500, description=f"An error occurred: {e}")
+    column_names = ACCIDENTS_DF.columns.tolist()
+    return jsonify(column_names)
 
 @app.route('/accidents/data/<int:number_of_rows>/<int:page_number>', methods=['GET'])
 def get_accident_data(number_of_rows, page_number):
@@ -80,46 +95,17 @@ def get_accident_data(number_of_rows, page_number):
         if number_of_rows <= 0 or page_number <= 0:
             abort(400, description="Number of rows and page number must be positive integers.")
 
-        # Calculate the starting row for the requested page
-        # Page number is 1-based, pandas rows are 0-based after the header.
-        start_row = (page_number - 1) * number_of_rows
-        
-        # First, get the column headers.
-        header_df = pd.read_csv(CSV_FILE_PATH, nrows=0)
-        column_names = header_df.columns.tolist()
+        # Calculate start and end index for slicing the DataFrame
+        start_index = (page_number - 1) * number_of_rows
+        end_index = start_index + number_of_rows
 
-        # Use skiprows to skip rows before the start_row and nrows to limit the number of rows read
-        # skiprows needs a list of row indices to skip. We skip the header (row 0) from this logic,
-        # so we skip rows from 1 to start_row.
-        # When providing `names`, pandas uses them and does not infer a header.
-        # Removing `header=0` prevents pandas from skipping the first data row it reads.
-        df_page = pd.read_csv(CSV_FILE_PATH, skiprows=range(1, start_row + 1), nrows=number_of_rows, names=column_names)
+        # Slice the DataFrame to get the requested page of data
+        df_page = ACCIDENTS_DF.iloc[start_index:end_index]
 
-        # --- DEBUGGING START ---
-        if not df_page.empty:
-            print("--- DataFrame before NaN conversion (first row) ---")
-            print(df_page.head(1).to_dict(orient='records')[0])
-        # --- DEBUGGING END ---
-
-        # Replace pandas NA/NaN with None so JSON encoder emits `null` for missing values,
-        # then convert the DataFrame to a list of dictionaries.
-        cleaned = df_page.where(pd.notnull(df_page), None)
-
-        # --- DEBUGGING START ---
-        if not cleaned.empty:
-            print("\n--- DataFrame after NaN conversion (first row) ---")
-            print(cleaned.head(1).to_dict(orient='records')[0])
-            print("---------------------------------------------------\n")
-        # --- DEBUGGING END ---
-
-        records = cleaned.to_dict(orient='records')
+        records = df_page.to_dict(orient='records')
 
         return jsonify(records)
 
-    except FileNotFoundError:
-        abort(404, description="Data source not found.")
-    except ValueError:
-        abort(400, description="Invalid input: number_of_rows and page_number must be integers.")
     except Exception as e:
         abort(500, description=f"An error occurred: {e}")
 
@@ -127,23 +113,17 @@ def get_accident_data(number_of_rows, page_number):
 def get_accident_count_by_state():
     """
     Returns the count of accidents grouped by state.
-    This reads the entire CSV but only the 'State' column to minimize memory usage.
+    This operation is now performed on the in-memory DataFrame.
     """
     try:
-        # Read only the 'State' column from the CSV
-        df_states = pd.read_csv(CSV_FILE_PATH, usecols=['State'])
-
         # Group by 'State' and count occurrences
-        state_counts = df_states['State'].value_counts().reset_index()
+        state_counts = ACCIDENTS_DF['State'].value_counts().reset_index()
         state_counts.columns = ['State', 'AccidentCount']
 
         # Convert the result to a list of dictionaries
         records = state_counts.to_dict(orient='records')
 
         return jsonify(records)
-
-    except FileNotFoundError:
-        abort(404, description="Data source not found.")
     except Exception as e:
         abort(500, description=f"An error occurred: {e}")
 
