@@ -12,6 +12,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Default PORT used by the Flask app when not overridden. Aligns with `app.py` default (8080).
+ENV PORT=8080
+
 # Copy only requirements first to leverage Docker layer caching
 COPY requirements.txt ./
 
@@ -21,8 +24,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source
 COPY flask_csv_api ./flask_csv_api
 
-# Expose the default Flask port
-EXPOSE 5000
+# Expose the port the app listens on (informational). The app respects $PORT.
+EXPOSE 8080
 
-# Use gunicorn as the production server. The module path is `flask_csv_api.app:app`.
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "flask_csv_api.app:app", "--workers", "2", "--threads", "4"]
+# Use gunicorn as the production server. Bind to the PORT env var so the container honors
+# the same default as `app.py` and can be overridden at runtime with -e PORT=... or Docker
+# orchestration platforms.
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} flask_csv_api.app:app --workers 2 --threads 4"]
