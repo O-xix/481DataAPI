@@ -1,121 +1,57 @@
 import os
-import io
-import zipfile
 import pandas as pd
-from flask import Flask, request, jsonify, abort, send_file
-from google.cloud import storage
-import kaggle
+from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
+
+# Define constants for the dataset
+# *** CRITICAL CHANGE: Uses the highly efficient Parquet file format ***
+DATA_FILE_PATH = 'data/US_Accidents_March23.parquet' 
 
 # Create the Flask application instance
 app = Flask(__name__)
-# Enable CORS so browser clients (e.g. your front-end at http://localhost:5173)
-# can make requests to this API during development without CORS errors.
-# Restrict origins in production to your real domain instead of using a wildcard.
-# Here we allow only the dev frontend origin.
-# CORS(app, origins=["http://localhost:5173"]) 
+# Enable CORS for development
 CORS(app)
 
-# Define constants for the dataset
-CSV_FILE_PATH = 'US_Accidents_March23.csv'
-KAGGLE_DATASET = 'sobhanmoosavi/us-accidents'
-
-# Google Cloud Storage bucket (can be overridden by env var)
-CLOUD_STORAGE_BUCKET = os.getenv('CLOUD_STORAGE_BUCKET', 'car-accindent-data')
-
-def get_storage_bucket():
-        """Return a google.cloud.storage Bucket instance for the configured bucket.
-
-        Notes:
-        - Locally, set GOOGLE_APPLICATION_CREDENTIALS to the JSON key file for a service account
-            that has storage.objectViewer/storage.objectCreator (or broader) permissions.
-        - On Cloud Run or GKE with Workload Identity, the runtime service account should have
-            the appropriate IAM roles and the client will pick up credentials automatically.
-        """
-        client = storage.Client()
-        return client.bucket(CLOUD_STORAGE_BUCKET)
-
 # This will hold our entire dataset in memory.
-# It's initialized to None and will be populated by load_dataset_on_startup.
 ACCIDENTS_DF = None
 
-@app.before_first_request
 def load_dataset_on_startup():
     """
-    Loads the dataset from the local CSV file into a global pandas DataFrame.
-    This runs once before the first request. The CSV file is expected to be
-    included in the container image during the build process.
+    Loads the dataset from the local Parquet file into a global pandas DataFrame.
+    This runs once before the first request.
     """
     global ACCIDENTS_DF
 
     # --- Best Practice: Use absolute paths relative to the app's location ---
     app_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(app_dir, CSV_FILE_PATH)
+    data_path = os.path.join(app_dir, DATA_FILE_PATH)
 
-    if not os.path.exists(csv_path):
-        abort(500, description=f"Fatal error: Dataset CSV file not found at {csv_path}. It should be included in the container image.")
-
-    try:
-        print("Loading dataset into memory...")
-        # Read the CSV directly into the DataFrame
-        ACCIDENTS_DF = pd.read_csv(csv_path)
-
-        # Replace NaN values with None for proper JSON serialization
-        ACCIDENTS_DF = ACCIDENTS_DF.where(pd.notnull(ACCIDENTS_DF), None)
-        print("Dataset loaded successfully.")
-
-    except Exception as e:
-        abort(500, description=f"Fatal error: Could not load dataset into memory: {e}")
-
-@app.route('/gcs/download/<path:filename>', methods=['GET'])
-def gcs_download(filename):
-    """Download a file from the configured GCS bucket and stream it to the client."""
-    try:
-        bucket = get_storage_bucket()
-        blob = bucket.blob(filename)
-
-        if not blob.exists():
-            return jsonify({"error": "File not found"}), 404
-
-        file_in_memory = io.BytesIO()
-        blob.download_to_file(file_in_memory)
-        file_in_memory.seek(0)
-
-        mimetype = blob.content_type or 'application/octet-stream'
-        return send_file(
-            file_in_memory,
-            mimetype=mimetype,
-            as_attachment=True,
-            download_name=filename
-        )
-    except Exception as e:
-        return jsonify({"error": f"Failed to download file: {str(e)}"}), 500
-
-
-@app.route('/gcs/upload', methods=['POST'])
-def gcs_upload():
-    """Upload a file provided in the multipart form to the configured GCS bucket."""
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part in the request"}), 400
-
-    uploaded_file = request.files['file']
-
-    if uploaded_file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
+    if not os.path.exists(data_path):
+        # This will immediately stop the server if the file isn't found
+        abort(500, description=f"Fatal error: Dataset file not found at {data_path}. Ensure the Parquet file is present.")
 
     try:
-        bucket = get_storage_bucket()
-        blob = bucket.blob(uploaded_file.filename)
-        blob.upload_from_file(uploaded_file, content_type=uploaded_file.content_type)
-        return jsonify({"message": f"File {uploaded_file.filename} uploaded successfully to {CLOUD_STORAGE_BUCKET}"}), 200
+        print("--- STARTING DATA LOAD: Reading Parquet file into memory... ---")
+        
+        # Read the Parquet file using pyarrow engine for efficiency
+        ACCIDENTS_DF = pd.read_parquet(data_path, engine='pyarrow')
+        
+        print(f"--- DATA LOADED SUCCESSFULLY: {len(ACCIDENTS_DF)} rows ---")
+
     except Exception as e:
-        return jsonify({"error": f"Failed to upload file: {str(e)}"}), 500
+        abort(500, description=f"Fatal error: Could not load Parquet dataset into memory: {e}")
+
+
+load_dataset_on_startup()
 
 @app.route('/accidents/sample', methods=['GET'])
 def get_accidents_sample():
     """
     Returns a sample (the first 10 rows) from the in-memory DataFrame.
     """
+    if ACCIDENTS_DF is None:
+         return jsonify({"error": "Data not loaded yet"}), 503
+         
     sample_df = ACCIDENTS_DF.head(10)
     records = sample_df.to_dict(orient='records')
     return jsonify(records)
@@ -123,18 +59,22 @@ def get_accidents_sample():
 @app.route('/accidents/columns', methods=['GET'])
 def get_accident_columns():
     """
-    Reads only the header of the CSV to get all column names.
-    This is a very fast and memory-efficient operation.
+    Reads all column names from the in-memory DataFrame.
     """
+    if ACCIDENTS_DF is None:
+         return jsonify({"error": "Data not loaded yet"}), 503
+         
     column_names = ACCIDENTS_DF.columns.tolist()
     return jsonify(column_names)
 
 @app.route('/accidents/data/<int:number_of_rows>/<int:page_number>', methods=['GET'])
 def get_accident_data(number_of_rows, page_number):
     """
-    Retrieves a specific number of rows from the CSV file based on pagination.
-    This method reads only the required rows to minimize memory usage.
+    Retrieves a specific number of rows from the DataFrame based on pagination.
     """
+    if ACCIDENTS_DF is None:
+         return jsonify({"error": "Data not loaded yet"}), 503
+         
     try:
         # Input validation
         if number_of_rows <= 0 or page_number <= 0:
@@ -158,8 +98,10 @@ def get_accident_data(number_of_rows, page_number):
 def get_accident_count_by_state():
     """
     Returns the count of accidents grouped by state.
-    This operation is now performed on the in-memory DataFrame.
     """
+    if ACCIDENTS_DF is None:
+         return jsonify({"error": "Data not loaded yet"}), 503
+         
     try:
         # Group by 'State' and count occurrences
         state_counts = ACCIDENTS_DF['State'].value_counts().reset_index()
@@ -174,17 +116,27 @@ def get_accident_count_by_state():
 
 @app.route('/accidents/total_records', methods=['GET'])
 def get_total_records():
+    """
+    Returns the total number of records in the DataFrame.
+    """
+    if ACCIDENTS_DF is None:
+         return jsonify({"error": "Data not loaded yet"}), 503
+         
     try:
-        # Use the in-memory DataFrame for a fast count.
         return jsonify({"total": len(ACCIDENTS_DF)})
     except Exception as e:
         abort(500, description=str(e))
 
 @app.route('/accidents/yearly_stats', methods=['GET'])
 def get_yearly_stats():
+    """
+    Returns the count of accidents per year.
+    """
+    if ACCIDENTS_DF is None:
+         return jsonify({"error": "Data not loaded yet"}), 503
+         
     try:
         # Perform the operation on the in-memory DataFrame.
-        # Convert to datetime and extract year safely
         df_copy = ACCIDENTS_DF[['Start_Time']].copy()
         df_copy['Year'] = pd.to_datetime(df_copy['Start_Time'], errors='coerce').dt.year
         yearly = df_copy['Year'].dropna().astype(int).value_counts().reset_index()
@@ -192,12 +144,9 @@ def get_yearly_stats():
         yearly = yearly.sort_values('year')
         return jsonify(yearly.to_dict('records'))
     except Exception as e:
-        print(f"Error in yearly_stats: {str(e)}")  # Debug log
+        print(f"Error in yearly_stats: {str(e)}")
         abort(500, description=str(e))
 
-# This is a standard entry point for a Flask application
-if __name__ == '__main__':
-    # Run the app in debug mode for development.
-    # Debug mode provides helpful error messages and auto-reloads the server on code changes.
-    # For production, you would use a proper WSGI server like Gunicorn or uWSGI.
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.ge))
+# Running the app will now be done using Gunicorn:
+# gunicorn --workers 3 --bind 0.0.0.0:8000 app:app
+# The if __name__ == '__main__': block is only needed for local development.

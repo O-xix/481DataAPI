@@ -1,3 +1,14 @@
 # Specific files to ignore
 US_Accidents_March23.csv
 .azure
+US_Accidents_March23.parquet
+
+# Virtual Environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE and editor directories
+.vscode/
