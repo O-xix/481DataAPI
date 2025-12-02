@@ -58,50 +58,46 @@ def load_dataset_on_startup():
         print(f"Error: Could not load Parquet dataset into memory: {e}")
         return
 
-    def pre_calculate_monthly_stats():
-        """
-        Pre-calculate monthly accident counts grouped by YearMonth + State.
-        Stores results in MONTHLY_STATE_COUNTS for fast lookup.
-        """
-        global ACCIDENTS_DF, MONTHLY_STATE_COUNTS
+def pre_calculate_monthly_stats():
+    """
+    Pre-calculate monthly accident counts grouped by YearMonth + State.
+    Stores results in MONTHLY_STATE_COUNTS for fast lookup.
+    """
+    global ACCIDENTS_DF, MONTHLY_STATE_COUNTS
 
-        try:
-            print("--- STARTING MONTHLY STATS PRE-CALCULATION ---")
+    try:
+        print("--- STARTING MONTHLY STATS PRE-CALCULATION ---")
 
-            df = ACCIDENTS_DF[['Start_Time', 'State']].copy()
+        df = ACCIDENTS_DF[['Start_Time', 'State']].copy()
 
-            # Convert dates (handle integer epoch seconds correctly)
-            df['Start_Time'] = _to_datetime_guess_unit(df['Start_Time'])
-            df = df.dropna(subset=['Start_Time', 'State'])
+        # Convert dates (handle integer epoch seconds correctly)
+        df['Start_Time'] = _to_datetime_guess_unit(df['Start_Time'])
+        df = df.dropna(subset=['Start_Time', 'State'])
 
-            # Extract YYYY-MM
-            df['YearMonth'] = df['Start_Time'].dt.to_period('M').astype(str)
+        # Extract YYYY-MM
+        df['YearMonth'] = df['Start_Time'].dt.to_period('M').astype(str)
 
-            # Group
-            monthly = df.groupby(['YearMonth', 'State']).size().reset_index(name='Count')
+        # Group
+        monthly = df.groupby(['YearMonth', 'State']).size().reset_index(name='Count')
 
-            # Max for scale
-            max_count = int(monthly['Count'].max()) if not monthly.empty else 0
+        # Max for scale
+        max_count = int(monthly['Count'].max()) if not monthly.empty else 0
 
-            MONTHLY_STATE_COUNTS = {
-                "max_count": max_count,
-                "data": monthly.to_dict(orient='records')
-            }
+        MONTHLY_STATE_COUNTS = {
+            "max_count": max_count,
+            "data": monthly.to_dict(orient='records')
+        }
 
-            print("--- MONTHLY STATS PRE-CALCULATION COMPLETE ---")
+        print("--- MONTHLY STATS PRE-CALCULATION COMPLETE ---")
 
-        except Exception as e:
-            print("Error during monthly stats calculation:", str(e))
-            MONTHLY_STATE_COUNTS = {"max_count": 0, "data": []}
-
-
-
-    pre_calculate_monthly_stats()
+    except Exception as e:
+        print("Error during monthly stats calculation:", str(e))
+        MONTHLY_STATE_COUNTS = {"max_count": 0, "data": []}
 
 
-# Attempt to load dataset when module is imported (safe: function returns if file missing)
+
 load_dataset_on_startup()
-
+pre_calculate_monthly_stats()
 
 @app.route('/accidents/sample', methods=['GET'])
 def get_accidents_sample():
@@ -218,9 +214,9 @@ def get_yearly_stats():
         print(f"Error in yearly_stats: {str(e)}")
         abort(500, description=str(e))
 
-#if __name__ == '__main__': 
+if __name__ == '__main__': 
     # Running the app locally for development
-    #app.run(debug=True, host='0.0.0.0', port=5000) 
+    app.run(debug=True, host='0.0.0.0', port=5000) 
 # Running the app will now be done using Gunicorn: 
 # # gunicorn --workers 1 --bind 0.0.0.0:8000 app:app
 # # The if __name__ == '__main__': block is only needed for local development.
